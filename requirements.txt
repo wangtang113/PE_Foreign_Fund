@@ -1,0 +1,47 @@
+# Core data processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Excel file handling
+openpyxl>=3.1.0
+xlrd>=2.0.0
+
+# Financial calculations
+numpy-financial>=1.0.0
+
+# Statistical analysis
+statsmodels>=0.14.0
+
+# Data visualization
+matplotlib>=3.7.0
+
+# Path and file handling
+pathlib2>=2.3.0
+
+# Regular expressions (built-in, but listing for completeness)
+# re - built-in module
+
+# Type hints (built-in in Python 3.9+)
+# typing - built-in module
+
+# Logging and warnings (built-in)
+# logging - built-in module
+# warnings - built-in module
+
+# System utilities (built-in)
+# sys - built-in module
+# os - built-in module
+
+# Multiprocessing (built-in)
+# multiprocessing - built-in module
+
+# Argument parsing (built-in)
+# argparse - built-in module
+
+# Development and testing (optional)
+jupyter>=1.0.0
+notebook>=6.5.0
+
+# Additional utilities that might be useful
+scipy>=1.10.0
+seaborn>=0.12.0
