@@ -4,7 +4,45 @@
 suppressWarnings(suppressMessages({
   library(fixest)
   library(sandwich)
+  library(dplyr)
 }))
+
+#' Winsorize columns in a data frame
+#' 
+#' @param df A data frame
+#' @param columns Vector of column names to winsorize
+#' @param limits Vector of (lower_limit, upper_limit) as percentiles between 0 and 1
+#' @return Data frame with winsorized columns
+winsorize <- function(df, columns, limits = c(0.01, 0.99)) {
+  df_copy <- df
+  
+  for (col in columns) {
+    if (col %in% names(df_copy)) {
+      values <- df_copy[[col]]
+      # Remove NA values for quantile calculation
+      non_na_values <- values[!is.na(values)]
+      
+      if (length(non_na_values) > 0) {
+        # Calculate percentiles
+        lower_bound <- quantile(non_na_values, limits[1], na.rm = TRUE)
+        upper_bound <- quantile(non_na_values, limits[2], na.rm = TRUE)
+        
+        # Count clipped values
+        lower_clipped <- sum(values < lower_bound, na.rm = TRUE)
+        upper_clipped <- sum(values > upper_bound, na.rm = TRUE)
+        
+        # Apply winsorization
+        df_copy[[col]] <- pmax(pmin(values, upper_bound), lower_bound)
+        
+        # Print info
+        cat(sprintf("Winsorized column '%s': %d values clipped at lower bound (%.4f), %d values clipped at upper bound (%.4f)\n",
+                   col, lower_clipped, lower_bound, upper_clipped, upper_bound))
+      }
+    }
+  }
+  
+  return(df_copy)
+}
 
 #' Two-way clustering using Cameron-Gelbach-Miller inclusion-exclusion principle
 #' 

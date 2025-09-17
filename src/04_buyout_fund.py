@@ -225,8 +225,8 @@ def transform_buyout_deals(
     'vintage', 'strategy','firmcountry','fund_size_usd_mn','fund_number_overall','fund_number_series',
     'buyout_fund_size','carried_interest_pct','hurdle_rate_pct']
     
-    # Add all available optional columns
-    available_optional_cols = [c for c in config['optional_cols'] if c in fund_details.columns]
+    # Add all available optional columns, excluding those already in base_merge_cols to avoid duplicates
+    available_optional_cols = [c for c in config['optional_cols'] if c in fund_details.columns and c not in base_merge_cols]
     merge_cols = base_merge_cols + available_optional_cols
     
     buyout_details = exploded.merge(
@@ -257,6 +257,13 @@ def transform_buyout_deals(
     buyout_details = buyout_details[buyout_details['strategy'] == 'Buyout']
     # drop the missing fund currency
     buyout_details = buyout_details[buyout_details['FUND CURRENCY'].notna()]
+    # create a deal_year column
+    buyout_details['deal_year'] = buyout_details['DEAL DATE'].dt.year.astype(int)
+    # merge the firm_currency
+    firm_currency_info = pd.read_csv("Output_data/country_currency_lookup.csv")[['firmcountry','vintage','currency_lookup']].drop_duplicates().rename(
+        columns={'currency_lookup': 'firm_currency','vintage': 'year'})
+    firm_currency_info['year'] = firm_currency_info['year'].astype(int)
+    buyout_details = buyout_details.merge(firm_currency_info, left_on=['firmcountry','deal_year'], right_on=['firmcountry','year'], how='left')
 
     return buyout_details
 

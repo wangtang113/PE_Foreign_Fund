@@ -203,7 +203,7 @@ def load_fund_buyout_deals(deals_path: str | Path = "Output_data/fund_buyout_dea
     # Clean and uppercase currency codes
     deals['Deal Currency'] = deals['DEAL CURRENCY'].str.strip().str.upper()
     deals['Fund Currency'] = deals['FUND CURRENCY'].str.strip().str.upper()
-
+    deals['Firm Currency'] = deals['firm_currency'].str.strip().str.upper()
     return deals
 
 
@@ -232,30 +232,17 @@ def merge_fx_rates(deals: DataFrame, fx_sp: DataFrame, fx_5y: DataFrame) -> Data
     deals = deals.copy()
     deals['Deal Currency'] = deals['Deal Currency'].replace({'RMB': 'CNY'})
     deals['Fund Currency'] = deals['Fund Currency'].replace({'RMB': 'CNY'})
-    
+    deals['Firm Currency'] = deals['Firm Currency'].replace({'RMB': 'CNY'})
     # Check coverage before filtering
     original_count = len(deals)
     deal_currency_covered = deals['Deal Currency'].isin(fx_currencies)
     fund_currency_covered = deals['Fund Currency'].isin(fx_currencies)
-    both_covered = deal_currency_covered & fund_currency_covered
+    firm_currency_covered = deals['Firm Currency'].isin(fx_currencies)
+    all_covered = deal_currency_covered & fund_currency_covered & firm_currency_covered
     
-    print(f"Currency coverage analysis:")
-    print(f"  Original deals: {original_count:,}")
-    print(f"  Deal currency covered: {deal_currency_covered.sum():,} ({deal_currency_covered.mean():.1%})")
-    print(f"  Fund currency covered: {fund_currency_covered.sum():,} ({fund_currency_covered.mean():.1%})")
-    print(f"  Both currencies covered: {both_covered.sum():,} ({both_covered.mean():.1%})")
-    
-    # Show uncovered currencies
-    uncovered_deal_currencies = deals[~deal_currency_covered]['Deal Currency'].value_counts()
-    uncovered_fund_currencies = deals[~fund_currency_covered]['Fund Currency'].value_counts()
-    
-    if len(uncovered_deal_currencies) > 0:
-        print(f"  Uncovered deal currencies: {dict(uncovered_deal_currencies.head(5))}")
-    if len(uncovered_fund_currencies) > 0:
-        print(f"  Uncovered fund currencies: {dict(uncovered_fund_currencies.head(5))}")
-    
+
     # Filter deals to only those with both currencies covered in FX data
-    deals = deals[both_covered].copy()
+    deals = deals[all_covered].copy()
     print(f"  Deals after filtering: {len(deals):,} (removed {original_count - len(deals):,})")
     
     # Create lookup tables by stacking currency columns
@@ -281,7 +268,11 @@ def merge_fx_rates(deals: DataFrame, fx_sp: DataFrame, fx_5y: DataFrame) -> Data
         on=["FX Quarter", "Fund Currency"], 
         how="left"
     )
-    
+    deals = deals.merge(
+        sp_lookup.rename(columns={"Currency": "Firm Currency", "sp": "sp_firm"}),
+        on=["FX Quarter", "Firm Currency"], 
+        how="left"
+    )
     # Merge 5Y forward rates for deal and fund currencies (forward_fx usage)
     deals = deals.merge(
         fwd5_lookup.rename(columns={"Currency": "Deal Currency", "fwd5": "fwd5_deal"}),
@@ -294,7 +285,11 @@ def merge_fx_rates(deals: DataFrame, fx_sp: DataFrame, fx_5y: DataFrame) -> Data
         on=["FX Quarter", "Fund Currency"], 
         how="left"
     )
-    
+    deals = deals.merge(
+        fwd5_lookup.rename(columns={"Currency": "Firm Currency", "fwd5": "fwd5_firm"}),
+        on=["FX Quarter", "Firm Currency"], 
+        how="left"
+    )
     # ---------- NEW: future spot at FX Quarter + 5Y (20 quarters)
     # Ensure FX Quarter is a quarterly Period dtype
     if not isinstance(deals["FX Quarter"].dtype, pd.PeriodDtype):
@@ -317,9 +312,15 @@ def merge_fx_rates(deals: DataFrame, fx_sp: DataFrame, fx_5y: DataFrame) -> Data
         how="left",
         suffixes=("", "_drop2")
     )
-    
+    deals = deals.merge(
+        sp_lookup.rename(columns={"Currency": "Firm Currency", "sp": "sp_firm_5y"}),
+        left_on=["FX Quarter 5Y", "Firm Currency"],
+        right_on=["FX Quarter", "Firm Currency"],
+        how="left",
+        suffixes=("", "_drop3")
+    )
     # Clean up any duplicated merge keys (if created)
-    drop_cols = [c for c in deals.columns if c.endswith("_drop") or c.endswith("_drop2")]
+    drop_cols = [c for c in deals.columns if c.endswith("_drop") or c.endswith("_drop2") or c.endswith("_drop3")]
     if drop_cols:
         deals = deals.drop(columns=drop_cols)
 
@@ -363,14 +364,18 @@ def merge_rer_rates(deals: DataFrame, rer: DataFrame) -> DataFrame:
         on=["FX Quarter", "Fund Currency"], 
         how="left"
     )
-    
+    deals = deals.merge(
+        rer_lookup.rename(columns={"Currency": "Firm Currency", "rer": "rer_firm"}),
+        on=["FX Quarter", "Firm Currency"], 
+        how="left"
+    )
     # Fill missing RER values with 1.0 for USD (since RER is relative to USD)
     usd_deal_mask = (deals['Deal Currency'] == 'USD') & deals['rer_deal'].isna()
     usd_fund_mask = (deals['Fund Currency'] == 'USD') & deals['rer_fund'].isna()
-    
+    usd_firm_mask = (deals['Firm Currency'] == 'USD') & deals['rer_firm'].isna()
     deals.loc[usd_deal_mask, 'rer_deal'] = 1.0
     deals.loc[usd_fund_mask, 'rer_fund'] = 1.0
-    
+    deals.loc[usd_firm_mask, 'rer_firm'] = 1.0
     return deals
 
 
@@ -402,7 +407,7 @@ def calculate_fx_rates(deals: DataFrame) -> DataFrame:
     # Boolean masks for USD currencies
     deal_is_usd = deals["Deal Currency"].eq("USD")
     fund_is_usd = deals["Fund Currency"].eq("USD")
-    
+    firm_is_usd = deals["Firm Currency"].eq("USD")
     # ---------- SP rate (current)
     deals["SP rate"] = np.where(
         deal_is_usd & fund_is_usd,
@@ -417,7 +422,19 @@ def calculate_fx_rates(deals: DataFrame) -> DataFrame:
             )
         )
     )
-    
+    deals["SP rate Firm"] = np.where(
+        firm_is_usd & fund_is_usd,
+        1.0,  # Both USD: no conversion needed
+        np.where(
+            firm_is_usd & ~fund_is_usd,
+            1.0 / deals["sp_fund"],  # Firm=USD, Fund≠USD: invert fund rate
+            np.where(
+                ~firm_is_usd & fund_is_usd,
+                deals["sp_firm"],  # Firm≠USD, Fund=USD: use firm rate
+                deals["sp_firm"] / deals["sp_fund"]  # Both≠USD: cross rate
+            )
+        )
+    )
     # ---------- Forward 5Y rate
     deals["Forward 5Y rate"] = np.where(
         deal_is_usd & fund_is_usd,
@@ -432,15 +449,27 @@ def calculate_fx_rates(deals: DataFrame) -> DataFrame:
             )
         )
     )
-    
+    deals["Forward 5Y rate Firm"] = np.where(
+        firm_is_usd & fund_is_usd,
+        1.0,  # Both USD: no conversion needed
+        np.where(
+            firm_is_usd & ~fund_is_usd,
+            1.0 / deals["fwd5_fund"],  # Firm=USD, Fund≠USD: invert fund rate
+            np.where(
+                ~firm_is_usd & fund_is_usd,
+                deals["fwd5_firm"],  # Firm≠USD, Fund=USD: use firm rate
+                deals["fwd5_firm"] / deals["fwd5_fund"]  # Both≠USD: cross rate
+            )
+        )
+    )
     # ---------- USD SP (deal vs USD)
     deals["USD SP"] = np.where(deal_is_usd, 1.0, deals["sp_deal"])
-    
+    deals["USD SP Firm"] = np.where(firm_is_usd, 1.0, deals["sp_firm"])
     # ---------- Currency Pair
     deals["Currency Pair"] = deals["Deal Currency"] + " " + deals["Fund Currency"]
-    
+    deals["Currency Pair Firm"] = deals["Firm Currency"] + " " + deals["Fund Currency"]
     # ---------- Ensure numeric
-    for c in ["SP rate", "Forward 5Y rate", "USD SP", "sp_deal_5y", "sp_fund_5y"]:
+    for c in ["SP rate", "Forward 5Y rate", "USD SP", "USD SP Firm", "sp_deal_5y", "sp_fund_5y"]:
         if c in deals.columns:
             deals[c] = pd.to_numeric(deals[c], errors="coerce")
     
@@ -450,13 +479,17 @@ def calculate_fx_rates(deals: DataFrame) -> DataFrame:
         (((deals["Forward 5Y rate"] / deals["SP rate"]) ** (1/5) - 1)*100),
         np.nan
     )
-    
+    deals["Deal forward_fx Firm"] = np.where(
+        deals["Forward 5Y rate Firm"].notna() & deals["SP rate Firm"].notna() & (deals["Forward 5Y rate Firm"] != 0),
+        (((deals["Forward 5Y rate Firm"] / deals["SP rate Firm"]) ** (1/5) - 1)*100),
+        np.nan
+    )
     # ---------- NEW: SP rate 5Y using *future* spots
     # If future spots are missing, SP rate 5Y becomes NaN
-    if {"sp_deal_5y", "sp_fund_5y"}.issubset(deals.columns):
+    if {"sp_deal_5y", "sp_fund_5y", "sp_firm_5y"}.issubset(deals.columns):
         deal_is_usd = deals["Deal Currency"].eq("USD")
         fund_is_usd = deals["Fund Currency"].eq("USD")
-        
+        firm_is_usd = deals["Firm Currency"].eq("USD")
         deals["SP rate 5Y"] = np.where(
             deal_is_usd & fund_is_usd,
             1.0,  # Both USD: no conversion needed
@@ -470,10 +503,25 @@ def calculate_fx_rates(deals: DataFrame) -> DataFrame:
                 )
             )
         )
+        deals["SP rate 5Y Firm"] = np.where(
+            firm_is_usd & fund_is_usd,
+            1.0,  # Both USD: no conversion needed
+            np.where(
+                firm_is_usd & ~fund_is_usd,
+                1.0 / deals["sp_fund_5y"],  # Firm=USD, Fund≠USD: invert fund rate
+                np.where(
+                    ~firm_is_usd & fund_is_usd,
+                    deals["sp_firm_5y"],  # Firm≠USD, Fund=USD: use firm rate
+                    deals["sp_firm_5y"] / deals["sp_fund_5y"]  # Both≠USD: cross rate
+                )
+            )
+        )
         deals["SP rate 5Y"] = pd.to_numeric(deals["SP rate 5Y"], errors="coerce")
+        deals["SP rate 5Y Firm"] = pd.to_numeric(deals["SP rate 5Y Firm"], errors="coerce")
     else:
         # Column not available → leave as NaN for clarity
         deals["SP rate 5Y"] = np.nan
+        deals["SP rate 5Y Firm"] = np.nan
     
     # ---------- NEW: Deal realized_fx (actual, from realized future spot vs current spot)
     deals["Deal realized_fx"] = np.where(
@@ -481,31 +529,43 @@ def calculate_fx_rates(deals: DataFrame) -> DataFrame:
         (((deals["SP rate 5Y"] / deals["SP rate"]) ** (1/5) - 1)*100),
         np.nan
     )
+    deals["Deal realized_fx Firm"] = np.where(
+        deals["SP rate Firm"].notna() & (deals["SP rate Firm"] != 0) & deals["SP rate 5Y Firm"].notna(),
+        (((deals["SP rate 5Y Firm"] / deals["SP rate Firm"]) ** (1/5) - 1)*100),
+        np.nan
+    )
 
     # ---------- NEW: Deal RER (Real Exchange Rate)
     # Deal RER = Deal Currency RER / Fund Currency RER
     # Handle edge cases where RER data might be missing
-    if {"rer_deal", "rer_fund"}.issubset(deals.columns):
+    if {"rer_deal", "rer_fund", "rer_firm"}.issubset(deals.columns):
         deals["Deal RER"] = np.where(
             deals["rer_deal"].notna() & deals["rer_fund"].notna() & (deals["rer_fund"] != 0),
             deals["rer_deal"] / deals["rer_fund"],
             np.nan
         )
         deals["Deal RER"] = pd.to_numeric(deals["Deal RER"], errors="coerce")
+        deals["Deal RER Firm"] = np.where(
+            deals["rer_firm"].notna() & deals["rer_fund"].notna() & (deals["rer_fund"] != 0),
+            deals["rer_firm"] / deals["rer_fund"],
+            np.nan
+        )
+        deals["Deal RER Firm"] = pd.to_numeric(deals["Deal RER Firm"], errors="coerce")
     else:
         # RER columns not available
         deals["Deal RER"] = np.nan
-
+        deals["Deal RER Firm"] = np.nan
     # Add a column for the deal size in USD
     deals["Deal Size USD (MN)"] = deals["DEAL SIZE (CURR. MN)"] * deals["SP rate"]
-    deals['Deal Year'] = deals['Deal Quarter'].dt.year
     # rename columns to avoid spaces and special characters in formulas
     deals = deals.rename(columns={
     'Deal Size USD (MN)': 'deal_size_usd_mn',
-    'Deal Year': 'deal_year',
     'Deal realized_fx': 'deal_realized_fx',
+    'Deal realized_fx Firm': 'deal_realized_fx_firm',
     'Deal forward_fx': 'deal_forward_fx',
+    'Deal forward_fx Firm': 'deal_forward_fx_firm',
     'Deal RER': 'deal_rer',
+    'Deal RER Firm': 'deal_rer_firm',
     })
     
     # Ensure deal_year is preserved through all subsequent operations
@@ -517,10 +577,12 @@ def calculate_fx_rates(deals: DataFrame) -> DataFrame:
     # drop all deals with missing deal_forward_fx before winsorizing
     deals = deals[deals['deal_forward_fx'].notna()]
     # winsorize the deal_forward_fx, deal_realized_fx, and deal_rer in the dta_deal at 1% and 99%
-    winsorize_cols = ['deal_forward_fx', 'deal_realized_fx']
+    winsorize_cols = ['deal_forward_fx', 'deal_realized_fx', 'deal_forward_fx_firm', 'deal_realized_fx_firm']
     # Only winsorize deal_rer if it has non-null values
     if deals['deal_rer'].notna().any():
         winsorize_cols.append('deal_rer')
+    if deals['deal_rer_firm'].notna().any():
+        winsorize_cols.append('deal_rer_firm')
     deals = winsorize(deals, winsorize_cols)
     # sort the deals by deal_id
     deals = deals.sort_values(by='DEAL ID')
@@ -534,6 +596,11 @@ def calculate_fx_rates(deals: DataFrame) -> DataFrame:
     deals['fund_currency_simplified'] = np.where(
         deals['Fund Currency'].isin(major_currencies), 
         deals['Fund Currency'], 
+        'Other'
+    )
+    deals['firm_currency_simplified'] = np.where(
+        deals['Firm Currency'].isin(major_currencies), 
+        deals['Firm Currency'], 
         'Other'
     )
     # read the macro_controls.csv
@@ -620,9 +687,13 @@ def calculate_fund_fx_measure(
     deal_col: str = "DEAL ID",
     ecr_col: str = "deal_forward_fx",
     acr_col: str = "deal_realized_fx",
+    ecr_firm_col: str = "deal_forward_fx_firm",
+    acr_firm_col: str = "deal_realized_fx_firm",
     rer_col: str = "deal_rer",
+    rer_firm_col: str = "deal_rer_firm",
     deal_ccy_col: str = "Deal Currency",
     fund_ccy_col: str = "Fund Currency",
+    firm_ccy_col: str = "Firm Currency",
 ) -> DataFrame:
     """
     Return fund-level currency metrics with BOTH weighting variants for forward_fx, realized_fx, rer,
@@ -655,7 +726,12 @@ def calculate_fund_fx_measure(
         df[acr_col] = pd.to_numeric(df[acr_col], errors="coerce")
     if rer_col in df.columns:
         df[rer_col] = pd.to_numeric(df[rer_col], errors="coerce")
-
+    if ecr_firm_col in df.columns:
+        df[ecr_firm_col] = pd.to_numeric(df[ecr_firm_col], errors="coerce")
+    if acr_firm_col in df.columns:
+        df[acr_firm_col] = pd.to_numeric(df[acr_firm_col], errors="coerce")
+    if rer_firm_col in df.columns:
+        df[rer_firm_col] = pd.to_numeric(df[rer_firm_col], errors="coerce")
     # ---- forward_fx weighted & equal
     if ecr_col in df.columns:
         size_w_ear = (group_weighted_mean(df, fund_col, ecr_col, "deal_weight")).rename("forward_fx_weighted")
@@ -663,7 +739,14 @@ def calculate_fund_fx_measure(
     else:
         size_w_ear = pd.Series(dtype="float64", name="forward_fx_weighted")
         eq_w_ear   = pd.Series(dtype="float64", name="forward_fx")
-
+    if ecr_firm_col in df.columns:
+        # Only aggregate firm measures when firm_currency == deal_currency
+        df_firm_filtered = df[df[firm_ccy_col] == df[deal_ccy_col]]
+        size_w_ear_firm = (group_weighted_mean(df_firm_filtered, fund_col, ecr_firm_col, "deal_weight")).rename("forward_fx_weighted_firm")
+        eq_w_ear_firm   = (group_equal_mean(df_firm_filtered, fund_col, ecr_firm_col)).rename("forward_fx_firm")
+    else:
+        size_w_ear_firm = pd.Series(dtype="float64", name="forward_fx_weighted_firm")
+        eq_w_ear_firm   = pd.Series(dtype="float64", name="forward_fx_firm")
     # ---- realized_fx weighted & equal
     if acr_col in df.columns:
         size_w_acr = (group_weighted_mean(df, fund_col, acr_col, "deal_weight")).rename("realized_fx_weighted")
@@ -671,7 +754,14 @@ def calculate_fund_fx_measure(
     else:
         size_w_acr = pd.Series(dtype="float64", name="realized_fx_weighted")
         eq_w_acr   = pd.Series(dtype="float64", name="realized_fx")
-
+    if acr_firm_col in df.columns:
+        # Only aggregate firm measures when firm_currency == deal_currency
+        df_firm_filtered = df[df[firm_ccy_col] == df[deal_ccy_col]]
+        size_w_acr_firm = (group_weighted_mean(df_firm_filtered, fund_col, acr_firm_col, "deal_weight")).rename("realized_fx_weighted_firm")
+        eq_w_acr_firm   = (group_equal_mean(df_firm_filtered, fund_col, acr_firm_col)).rename("realized_fx_firm")
+    else:
+        size_w_acr_firm = pd.Series(dtype="float64", name="realized_fx_weighted_firm")
+        eq_w_acr_firm   = pd.Series(dtype="float64", name="realized_fx_firm")
     # ---- rer weighted & equal
     if rer_col in df.columns:
         size_w_rer = (group_weighted_mean(df, fund_col, rer_col, "deal_weight")).rename("rer_weighted")
@@ -679,6 +769,14 @@ def calculate_fund_fx_measure(
     else:
         size_w_rer = pd.Series(dtype="float64", name="rer_weighted")
         eq_w_rer   = pd.Series(dtype="float64", name="rer")
+    if rer_firm_col in df.columns:
+        # Only aggregate firm measures when firm_currency == deal_currency
+        df_firm_filtered = df[df[firm_ccy_col] == df[deal_ccy_col]]
+        size_w_rer_firm = (group_weighted_mean(df_firm_filtered, fund_col, rer_firm_col, "deal_weight")).rename("rer_weighted_firm")
+        eq_w_rer_firm   = (group_equal_mean(df_firm_filtered, fund_col, rer_firm_col)).rename("rer_firm")
+    else:
+        size_w_rer_firm = pd.Series(dtype="float64", name="rer_weighted_firm")
+        eq_w_rer_firm   = pd.Series(dtype="float64", name="rer_firm")
 
     # ---- Foreign investment indicator (1 if deal ccy != fund ccy, else 0; NaN if either missing)
     deal_ccy = df[deal_ccy_col].astype(str).str.upper()
@@ -736,8 +834,11 @@ def calculate_fund_fx_measure(
         pd.concat(
             [
                 size_w_ear, eq_w_ear,
+                size_w_ear_firm, eq_w_ear_firm,
                 size_w_acr, eq_w_acr,
+                size_w_acr_firm, eq_w_acr_firm,
                 size_w_rer, eq_w_rer,
+                size_w_rer_firm, eq_w_rer_firm,
                 size_w_foreign, eq_w_foreign,
                 fund_n_deals, 
                 fund_n_deals_with_negative_forward_fx, fund_n_deals_with_non_negative_forward_fx, 
@@ -805,13 +906,13 @@ def main(fx_path: str | Path = "Output_data/FX_forward.csv",
     # Select and order final columns
     output_cols = [
         'DEAL ID', 'DEAL FUND', 'FUND NUMBER', 'fund_id', 'firm_id', 'vintage', 'deal_size_usd_mn',
-        'Deal Quarter', 'deal_year', 'FX Quarter', 'FX Quarter 5Y', 'Currency Pair', 'Deal Currency', 'Fund Currency',
-        'SP rate', 'Forward 5Y rate', 'SP rate 5Y', 'USD SP', 'geographic_focus', 'PRIMARY INDUSTRY',
-        'deal_forward_fx', 'deal_realized_fx', 'deal_rer', 'rer_deal', 'rer_fund', 'deal_weight', 'deal_size_per_fund_usd',
+        'Deal Quarter', 'deal_year', 'FX Quarter', 'FX Quarter 5Y', 'Currency Pair', 'Currency Pair Firm', 'Deal Currency', 'Fund Currency', 'Firm Currency',
+        'SP rate', 'SP rate Firm', 'Forward 5Y rate', 'Forward 5Y rate Firm', 'SP rate 5Y', 'USD SP', 'USD SP Firm', 'geographic_focus', 'PRIMARY INDUSTRY',
+        'deal_forward_fx', 'deal_forward_fx_firm', 'deal_realized_fx', 'deal_realized_fx_firm', 'deal_rer', 'deal_rer_firm', 'rer_deal', 'rer_fund', 'rer_firm', 'deal_weight', 'deal_size_per_fund_usd',
         'TARGET COMPANY', 'TARGET COMPANY COUNTRY', 'DEAL DATE', 'firmcountry','fund_size_usd_mn','fund_number_overall','fund_number_series', 
-        'buyout_fund_size','carried_interest_pct','hurdle_rate_pct',
+        'buyout_fund_size','carried_interest_pct','hurdle_rate_pct', 'firm_currency',
         'DEAL STATUS', 'PRIMARY INDUSTRY', 'ln_deal_size_usd_mn',
-        'deal_currency_simplified', 'fund_currency_simplified', 'fund_country'
+        'deal_currency_simplified', 'fund_currency_simplified', 'firm_currency_simplified', 'fund_country'
     ]
     
     # Keep only columns that exist

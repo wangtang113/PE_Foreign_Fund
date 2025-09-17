@@ -5,7 +5,7 @@ suppressWarnings(suppressMessages({
 }))
 
 # Create a LaTeX body matching Python table style: all coefficients + separate FE rows
-create_custom_latex_generic <- function(models, coef_name, coef_label, filename) {
+create_custom_latex_generic <- function(models, coef_name = "", coef_label = "", filename) {
   output <- c()
 
   # Header row (column numbers) - dynamically handle any number of models
@@ -65,40 +65,32 @@ create_custom_latex_generic <- function(models, coef_name, coef_label, filename)
     output <<- c(output, paste(paste(c("", ses), collapse = " & "), "\\\\"))
   }
 
-  # Main FX variable (always show first)
-  get_coef_and_se(coef_name, coef_label)
+  # Main FX variable (only show if specified)
+  if (coef_name != "" && coef_label != "") {
+    get_coef_and_se(coef_name, coef_label)
+  }
 
   # Control variables (show coefficients if present)
   control_vars <- list(
-    # fund-level control variables
-    "is_fund_currency" = "Fund currency",
-    "is_firm_currency" = "Firm currency",
+    "firm_currency_ratio" = "Firm currency ratio",
+    "firm_currency_ratio_plus" = "Firm currency ratio (+)",
+    "firm_currency_ratio_minus" = "Firm currency ratio (-)",
+    "equal_firm_currency" = "Equal firm currency",
+    "forward_fx" = "Forward FX",
+    "forward_fx_firm" = "Forward FX firm",
+    "fund_currency_ratio" = "Fund currency ratio",
+    "is_foreign_investment" = "Cross-currency investment",
     "ln_fund_size_usd_mn" = "ln(Fund size)",
     "ln_fund_n_deals" = "ln(Number of fund deals)",
     "ln_fund_number_overall" = "ln(Fund number overall)",
-    "ln_fund_number_series" = "ln(Fund number in series)",
-    "ln_n_deals_tm1" = "ln(Number of deals (t-1))",
-    # deal-country-level control variables
-    "ln_all_deals_by_country_year_tm1" = "ln(Total acquisitions (t-1))", # by deal country-year
-    "gdp_growth_tm1" = "GDP growth (t-1)", # by deal country-year
-    # deal-panel-level control variables
-    "all_deals_by_currency_year" = "Total acquisitions", # by deal currency-year
-    "all_deals_by_currency_year_tm1" = "Total acquisitions (t-1)", # by deal currency-year
-    "ln_all_deals_by_currency_year" = "ln(Total acquisitions)", # by deal currency-year
-    "interest_rate" = "Interest rate (t)", # by deal currency-year
-    "avg_gdp_growth" = "GDP growth (t)", # by deal currency-year
-    "avg_gdp_growth_tm1" = "GDP growth (t-1)", # by deal currency-year
-    "ln_all_deals_by_currency_year_tm1" = "ln(Total acquisitions (t-1))", # by deal currency-year
-    "interest_rate_tm1" = "Interest rate (t-1)", # by deal currency-year
-    "prev_currency_experience" = "Deal currency experience", # by deal currency-year
-    "previous_invested_years" = "Previous invested years", # by deal currency-year
-    "time_to_latest_deal" = "Time to latest deal" # by deal currency-year
+    "ln_fund_number_series" = "ln(Fund number series)",
+    "ln_fund_n_currencies" = "ln(Number of currencies)"
   )
   
   for (var_name in names(control_vars)) {
-    # Check if any model has this control variable
+    # Check if any model has this control variable and it's not the main coefficient already shown
     has_var <- any(sapply(models, function(m) var_name %in% names(coef(m))))
-    if (has_var) {
+    if (has_var && var_name != coef_name) {
       get_coef_and_se(var_name, control_vars[[var_name]])
     }
   }
@@ -146,6 +138,11 @@ create_custom_latex_generic <- function(models, coef_name, coef_label, filename)
       fe_vars <- tryCatch(m$fixef_vars, error = function(e) character(0))
       # Only exact match, not in interactions
       "buyout_fund_size" %in% fe_vars && !any(grepl("buyout_fund_size\\^", fe_vars))
+    },
+    "Firm currency FE" = function(m) {
+      fe_vars <- tryCatch(m$fixef_vars, error = function(e) character(0))
+      # Only exact match, not in interactions
+      "firm_currency" %in% fe_vars && !any(grepl("firm_currency\\^", fe_vars))
     },
     "Year $\\times$ Deal country FE" = function(m) {
       fe_vars <- tryCatch(m$fixef_vars, error = function(e) character(0))
@@ -212,6 +209,14 @@ create_custom_latex_generic <- function(models, coef_name, coef_label, filename)
     "Fund currency $\\times$ Vintage FE" = function(m) {
       fe_vars <- tryCatch(m$fixef_vars, error = function(e) character(0))
       any(grepl("fund_currency\\^vintage", fe_vars)) || any(grepl("vintage\\^fund_currency", fe_vars))
+    },
+    "Fund currency $\\times$ Firm currency FE" = function(m) {
+      fe_vars <- tryCatch(m$fixef_vars, error = function(e) character(0))
+      any(grepl("fund_currency\\^firm_currency", fe_vars)) || any(grepl("firm_currency\\^fund_currency", fe_vars))
+    },
+    "Firm currency $\\times$ Vintage FE" = function(m) {
+      fe_vars <- tryCatch(m$fixef_vars, error = function(e) character(0))
+      any(grepl("firm_currency\\^vintage", fe_vars)) || any(grepl("vintage\\^firm_currency", fe_vars))
     },
     "Fund number overall FE" = function(m) {
       fe_vars <- tryCatch(m$fixef_vars, error = function(e) character(0))
