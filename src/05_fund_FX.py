@@ -241,8 +241,8 @@ def merge_fx_rates(deals: DataFrame, fx_sp: DataFrame, fx_5y: DataFrame) -> Data
     all_covered = deal_currency_covered & fund_currency_covered & firm_currency_covered
     
 
-    # Filter deals to only those with both currencies covered in FX data
-    deals = deals[all_covered].copy()
+    # Filter deals to only those with both currencies covered in FX data (Now I don't care much about FX)
+    #deals = deals[all_covered].copy()
     print(f"  Deals after filtering: {len(deals):,} (removed {original_count - len(deals):,})")
     
     # Create lookup tables by stacking currency columns
@@ -574,8 +574,20 @@ def calculate_fx_rates(deals: DataFrame) -> DataFrame:
     for var in ln_vars:
         deals[f'ln_{var}'] = np.log(deals[var] + 1)
 
-    # drop all deals with missing deal_forward_fx before winsorizing
-    deals = deals[deals['deal_forward_fx'].notna()]
+    # IMPORTANT: Calculate fund-level measures BEFORE filtering deals
+    # This ensures foreign_investment_pct is calculated on complete deal data
+    print("Computing fund-level measures on complete deal data...")
+    deals_for_fund_measures = calculate_deal_weight(deals.copy())
+    fund_fx_measure_complete = calculate_fund_fx_measure(deals_for_fund_measures)
+    fund_fx_measure_complete.to_csv("Output_data/fund_fx_measure.csv", index=False)
+    print(f"✓ Saved complete fund-level measures: {len(fund_fx_measure_complete):,} funds")
+    
+    # Now drop deals with missing deal_forward_fx for deal-level analysis only
+    print(f"Filtering deals: {len(deals):,} → ", end="")
+    # Now keep all deals even if they have missing FX
+    #deals = deals[deals['deal_forward_fx'].notna()]
+
+    
     # winsorize the deal_forward_fx, deal_realized_fx, and deal_rer in the dta_deal at 1% and 99%
     winsorize_cols = ['deal_forward_fx', 'deal_realized_fx', 'deal_forward_fx_firm', 'deal_realized_fx_firm']
     # Only winsorize deal_rer if it has non-null values
@@ -924,14 +936,8 @@ def main(fx_path: str | Path = "Output_data/FX_forward.csv",
     final_output.to_csv(out_path, index=False)
     print(f"✓ Saved {len(final_output):,} records")
     
-    # Compute weights & fund-level forward_fx
-    print("Computing deal weights and fund-level forward_fx...")
-    deals_w = calculate_deal_weight(final_deals)
-    
-    fund_fx_measure = calculate_fund_fx_measure(deals_w)
-    
-    fund_fx_measure.to_csv("Output_data/fund_fx_measure.csv", index=False)
-    print(f"✓ Saved fund-level forward_fx measures: {len(fund_fx_measure):,} funds")
+    # Note: Fund-level measures already calculated and saved during FX processing
+    # This prevents foreign_investment_pct calculation on filtered deal data
 
     
     

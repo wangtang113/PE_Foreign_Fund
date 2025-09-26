@@ -103,11 +103,9 @@ def load_and_process_buyout_deals():
         how='left',
         validate='many_to_one'
     )
-    # Now I try dropping the deal currency filling part to see if it works (already reverted)
-    mask = buyout_deals['DEAL CURRENCY'].isna()
-    buyout_deals.loc[mask, 'DEAL CURRENCY'] = buyout_deals.loc[mask, 'ISO_CODE']
-
-    # Remove extra columns from merge
+    # Now I try dropping the deal currency filling part to see if it works
+    #mask = buyout_deals['DEAL CURRENCY'].isna()
+    #buyout_deals.loc[mask, 'DEAL CURRENCY'] = buyout_deals.loc[mask, 'ISO_CODE']
     buyout_deals = buyout_deals.drop(columns=['ISO_CODE', 'COUNTRY'])
 
     

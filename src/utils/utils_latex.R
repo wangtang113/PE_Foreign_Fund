@@ -72,19 +72,28 @@ create_custom_latex_generic <- function(models, coef_name = "", coef_label = "",
 
   # Control variables (show coefficients if present)
   control_vars <- list(
+    # Currency-based variables
     "firm_currency_ratio" = "Firm currency ratio",
-    "firm_currency_ratio_plus" = "Firm currency ratio (+)",
-    "firm_currency_ratio_minus" = "Firm currency ratio (-)",
-    "equal_firm_currency" = "Equal firm currency",
-    "forward_fx" = "Forward FX",
-    "forward_fx_firm" = "Forward FX firm",
+    "diff_firm_currency" = "Different firm currency",
     "fund_currency_ratio" = "Fund currency ratio",
     "is_foreign_investment" = "Cross-currency investment",
+    "is_domestic_investment" = "Domestic investment",
+    # Country-based variables (NEW)
+    "firm_country_ratio" = "Firm country ratio",
+    "diff_firm_country" = "Different firm country",
+    "fund_country_ratio" = "Fund country ratio",
+    "is_cross_country_investment" = "Cross-country investment",
+    
+    # Other controls
+    "forward_fx" = "Forward FX",
+    "forward_fx_firm" = "Forward FX firm",
     "ln_fund_size_usd_mn" = "ln(Fund size)",
     "ln_fund_n_deals" = "ln(Number of fund deals)",
     "ln_fund_number_overall" = "ln(Fund number overall)",
     "ln_fund_number_series" = "ln(Fund number series)",
-    "ln_fund_n_currencies" = "ln(Number of currencies)"
+    "ln_fund_n_currencies" = "ln(Number of currencies)",
+    "distance_forward_fx" = "Distance forward FX",
+    "distance_forward_fx_firm" = "Distance forward FX firm"
   )
   
   for (var_name in names(control_vars)) {
@@ -143,6 +152,11 @@ create_custom_latex_generic <- function(models, coef_name = "", coef_label = "",
       fe_vars <- tryCatch(m$fixef_vars, error = function(e) character(0))
       # Only exact match, not in interactions
       "firm_currency" %in% fe_vars && !any(grepl("firm_currency\\^", fe_vars))
+    },
+    "Firm country FE" = function(m) {
+      fe_vars <- tryCatch(m$fixef_vars, error = function(e) character(0))
+      # Only exact match, not in interactions
+      "firmcountry" %in% fe_vars && !any(grepl("firmcountry\\^", fe_vars))
     },
     "Year $\\times$ Deal country FE" = function(m) {
       fe_vars <- tryCatch(m$fixef_vars, error = function(e) character(0))
